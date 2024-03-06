@@ -3,12 +3,16 @@ package weed_server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"mime"
 	"net/http"
+	"os"
+	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -84,6 +88,90 @@ func checkPreconditions(w http.ResponseWriter, r *http.Request, entry *filer.Ent
 	return false
 }
 
+var g_masterPort int = 0
+var g_masterDefaultPort int = 2020
+
+// 获取web服务的端口号
+func getWebPort(conf string) (int, error) {
+	type Config struct {
+		Service struct {
+			Web struct {
+				Port int `json:"port"`
+			} `json:"web"`
+		} `json:"service"`
+	}
+	file, err := os.Open(conf)
+	if err != nil {
+		glog.Errorf("Error:%s", err.Error())
+		return 0, err
+	}
+	defer file.Close()
+	var config Config
+	decoder := json.NewDecoder(file)
+	err = decoder.Decode(&config)
+	if err != nil {
+		glog.Errorf("Error:%s", err.Error())
+		return 0, err
+	}
+	return config.Service.Web.Port, nil
+}
+
+// 获取Master的端口号
+func getMasterPort() int {
+	if g_masterPort == 0 {
+		exePath, err := os.Executable()
+		if err != nil {
+			glog.Errorf("Error:%s", err.Error())
+			return g_masterDefaultPort
+		}
+		var conf string
+		if runtime.GOOS == "windows" {
+			conf = filepath.Dir(exePath) + "/../../etc/config.json"
+		} else {
+			conf = "/opt/ydisks/config.json"
+		}
+		webPort, err := getWebPort(conf)
+		if err != nil {
+			glog.Errorf("Error:%s", err.Error())
+			return g_masterDefaultPort
+		}
+		g_masterPort = webPort
+	}
+	return g_masterPort
+}
+
+// GET HEAD方法的处理扩展实现，用于兼容yoss下载方式
+func (fs *FilerServer) GetOrHeadHandlerEx(w http.ResponseWriter, r *http.Request) (err error) {
+	blkName := path.Base(r.URL.Path)
+	masterIp := "127.0.0.1"
+	s := fs.option.Masters.GetInstances()
+	if len(s) > 0 {
+		masterIp = strings.Split(s[0].String(), ":")[0]
+	}
+	masterPort := getMasterPort()
+	ossUrl := "http://" + masterIp + ":" + strconv.Itoa(masterPort) + "/oss/" + blkName
+	resp, err := http.Head(ossUrl)
+	if resp.StatusCode != http.StatusOK {
+		glog.Errorf("Error:%s", err.Error())
+		return err
+	}
+	if r.Method == "HEAD" {
+		w.Header().Set("Content-Length", strconv.FormatInt(0, 10))
+		return nil
+	}
+	resp, err = http.Get(ossUrl)
+	if err != nil {
+		glog.Errorf("Error:%s", err.Error())
+		return err
+	}
+	defer resp.Body.Close()
+	_, err = io.Copy(w, resp.Body)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (fs *FilerServer) GetOrHeadHandler(w http.ResponseWriter, r *http.Request) {
 
 	path := r.URL.Path
@@ -91,7 +179,10 @@ func (fs *FilerServer) GetOrHeadHandler(w http.ResponseWriter, r *http.Request) 
 	if isForDirectory && len(path) > 1 {
 		path = path[:len(path)-1]
 	}
-
+	//兼容yoss下载方式
+	if fs.GetOrHeadHandlerEx(w, r) == nil {
+		return
+	}
 	entry, err := fs.filer.FindEntry(context.Background(), util.FullPath(path))
 	if err != nil {
 		if path == "/" {
