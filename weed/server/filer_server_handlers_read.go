@@ -151,9 +151,12 @@ func (fs *FilerServer) GetOrHeadHandlerEx(w http.ResponseWriter, r *http.Request
 	masterPort := getMasterPort()
 	ossUrl := "http://" + masterIp + ":" + strconv.Itoa(masterPort) + "/oss/" + blkName
 	resp, err := http.Head(ossUrl)
-	if resp.StatusCode != http.StatusOK {
+	if err != nil {
 		glog.Errorf("Error:%s", err.Error())
 		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Error:%s", resp.Status)
 	}
 	if r.Method == "HEAD" {
 		w.Header().Set("Content-Length", strconv.FormatInt(0, 10))
