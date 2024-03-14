@@ -88,41 +88,56 @@ func checkPreconditions(w http.ResponseWriter, r *http.Request, entry *filer.Ent
 	return false
 }
 
-var g_masterPort int = 0
-var g_masterDefaultPort int = 2020
+var g_OSSURL string = ""
+var g_defaultOSSURL string = "http://127.0.0.1:2020/oss/"
 
-// 获取web服务的端口号
-func getWebPort(conf string) (int, error) {
-	type Config struct {
-		Service struct {
-			Web struct {
-				Port int `json:"port"`
-			} `json:"web"`
-		} `json:"service"`
-	}
+type WebConfig struct {
+	Service struct {
+		Web struct {
+			Scheme   string `json:"scheme"`
+			HostName string `json:"hostName"`
+			Port     int    `json:"port"`
+		} `json:"web"`
+	} `json:"service"`
+}
+
+// 将配置文件中的配置信息转换成URL
+func (wc *WebConfig) GetWebUrl() string {
+	return wc.Service.Web.Scheme + "://" + wc.Service.Web.HostName + ":" + strconv.Itoa(wc.Service.Web.Port)
+}
+func NewWebConfig() *WebConfig {
+	WebConfig := &WebConfig{}
+	WebConfig.Service.Web.Scheme = "http"
+	WebConfig.Service.Web.HostName = "127.0.0.1"
+	WebConfig.Service.Web.Port = 2020
+	return WebConfig
+}
+
+// 获取web服务的配置信息
+func getWebConf(conf string) (*WebConfig, error) {
+	webConfig := NewWebConfig()
 	file, err := os.Open(conf)
 	if err != nil {
 		glog.Errorf("Error:%s", err.Error())
-		return 0, err
+		return webConfig, err
 	}
 	defer file.Close()
-	var config Config
 	decoder := json.NewDecoder(file)
-	err = decoder.Decode(&config)
+	err = decoder.Decode(webConfig)
 	if err != nil {
 		glog.Errorf("Error:%s", err.Error())
-		return 0, err
+		return webConfig, err
 	}
-	return config.Service.Web.Port, nil
+	return webConfig, nil
 }
 
-// 获取Master的端口号
-func getMasterPort() int {
-	if g_masterPort == 0 {
+// 获取OSS url
+func getOSSUrl() string {
+	if g_OSSURL == "" {
 		exePath, err := os.Executable()
 		if err != nil {
 			glog.Errorf("Error:%s", err.Error())
-			return g_masterDefaultPort
+			return g_defaultOSSURL
 		}
 		var conf string
 		if runtime.GOOS == "windows" {
@@ -130,26 +145,19 @@ func getMasterPort() int {
 		} else {
 			conf = "/opt/ydisks/config.json"
 		}
-		webPort, err := getWebPort(conf)
+		webConfig, err := getWebConf(conf)
 		if err != nil {
 			glog.Errorf("Error:%s", err.Error())
-			return g_masterDefaultPort
+			return g_defaultOSSURL
 		}
-		g_masterPort = webPort
+		g_OSSURL = webConfig.GetWebUrl() + "/oss/"
 	}
-	return g_masterPort
+	return g_OSSURL
 }
 
 // GET HEAD方法的处理扩展实现，用于兼容yoss下载方式
 func (fs *FilerServer) GetOrHeadHandlerEx(w http.ResponseWriter, r *http.Request) (err error) {
-	blkName := path.Base(r.URL.Path)
-	masterIp := "127.0.0.1"
-	s := fs.option.Masters.GetInstances()
-	if len(s) > 0 {
-		masterIp = strings.Split(s[0].String(), ":")[0]
-	}
-	masterPort := getMasterPort()
-	ossUrl := "http://" + masterIp + ":" + strconv.Itoa(masterPort) + "/oss/" + blkName
+	ossUrl := getOSSUrl() + path.Base(r.URL.Path)
 	resp, err := http.Head(ossUrl)
 	if err != nil {
 		glog.Errorf("Error:%s", err.Error())
