@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -157,6 +158,10 @@ func getOSSUrl() string {
 
 // GET HEAD方法的处理扩展实现，用于兼容yoss下载方式
 func (fs *FilerServer) GetOrHeadHandlerEx(w http.ResponseWriter, r *http.Request) (err error) {
+	upgradeStatus := r.Header.Get("X-Yserver-Upgrade")
+	if upgradeStatus == "running" {
+		return errors.New("yserver upgrade is running, only oss2 handler head quest, not forward to yoss")
+	}
 	ossUrl := getOSSUrl() + path.Base(r.URL.Path)
 	resp, err := http.Head(ossUrl)
 	if err != nil {
@@ -190,10 +195,6 @@ func (fs *FilerServer) GetOrHeadHandler(w http.ResponseWriter, r *http.Request) 
 	if isForDirectory && len(path) > 1 {
 		path = path[:len(path)-1]
 	}
-	//兼容yoss下载方式
-	if fs.GetOrHeadHandlerEx(w, r) == nil {
-		return
-	}
 	entry, err := fs.filer.FindEntry(context.Background(), util.FullPath(path))
 	if err != nil {
 		if path == "/" {
@@ -201,6 +202,10 @@ func (fs *FilerServer) GetOrHeadHandler(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if err == filer_pb.ErrNotFound {
+			//兼容yoss下载方式
+			if fs.GetOrHeadHandlerEx(w, r) == nil {
+				return
+			}
 			glog.V(2).Infof("Not found %s: %v", path, err)
 			stats.FilerHandlerCounter.WithLabelValues(stats.ErrorReadNotFound).Inc()
 			w.WriteHeader(http.StatusNotFound)
