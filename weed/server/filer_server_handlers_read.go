@@ -158,9 +158,9 @@ func getOSSUrl() string {
 
 // GET HEAD方法的处理扩展实现，用于兼容yoss下载方式
 func (fs *FilerServer) GetOrHeadHandlerEx(w http.ResponseWriter, r *http.Request) (err error) {
-	upgradeStatus := r.Header.Get("X-Yserver-Upgrade")
-	if upgradeStatus == "running" {
-		return errors.New("yserver upgrade is running, only oss2 handler head quest, not forward to yoss")
+	upgradeStatus := r.Header.Get("X-Yserver-ForwardToYoss")
+	if upgradeStatus == "close" {
+		return errors.New("only oss2 handler GET/HEAD quest, not forward to yoss")
 	}
 	ossUrl := getOSSUrl() + path.Base(r.URL.Path)
 	resp, err := http.Head(ossUrl)
